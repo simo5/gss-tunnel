@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE reference PUBLIC "-//OASIS//DTD DocBook V4.4//EN"
+"http://www.oasis-open.org/docbook/xml/4.4/docbookx.dtd">
+<reference>
+<title>Gsstunnel Manual pages</title>
+<refentry>
+    <refentryinfo>
+        <productname>Gsstunnel</productname>
+        <orgname>Gsstunnel - http://gsstunnel</orgname>
+    </refentryinfo>
+
+    <refmeta>
+        <refentrytitle>gsstunnel.conf</refentrytitle>
+        <manvolnum>5</manvolnum>
+    </refmeta>
+
+    <refnamediv id='name'>
+        <refname>gsstunnel.conf</refname>
+        <refpurpose>Gsstunnel Configuration file</refpurpose>
+    </refnamediv>
+
+    <refsect1 id='description'>
+        <title>DESCRIPTION</title>
+        <para>
+            Optional configuration directives for gsstunnel.
+        </para>
+        <para>
+            The gsstunnel.conf file is a classic ini-style configuration file.
+            Each option consist of a key = value pair.
+            Any characters behind '#' will be treated as comments and will be
+            ignored.
+        </para>
+    </refsect1>
+
+    <refsect1 id='sections'>
+        <title>SECTIONS</title>
+        <para>
+            A section in the gsstunnel.conf file is identified by the sectionname
+            in square brackets ([sectionname]).
+        </para>
+    </refsect1>
+
+    <refsect1 id='options'>
+        <title>OPTIONS</title>
+        <para>
+            gsstunnel supports the following options:
+            <variablelist>
+
+                <varlistentry>
+                    <term>cred_store (string)</term>
+                    <listitem>
+                        <para>This parameter allows to control in which way
+                              gsstunnel should use the cred_store interface
+                              provided by GSSAPI. The parameter can be
+                              defined multiple times per service.</para>
+                        <para>The syntax of the cred_store parameter is as
+                            follows:
+                            <![CDATA[cred_store = <cred_store_option>:<cred_store_value>]]></para>
+                        <para>Currently this interface supports the following
+                            options:</para>
+
+                        <variablelist>
+                            <varlistentry>
+                                <term>keytab</term>
+                                <listitem>
+                                    <para>Defines the keytab the service should
+                                    use.
+                                    Example: cred_store = keytab:/path/to/keytab
+                                    </para>
+                                </listitem>
+                            </varlistentry>
+                            <varlistentry>
+                                <term>client_keytab</term>
+                                <listitem>
+                                    <para>Defines a client keytab the service
+                                    should use.
+                                    Example: cred_store = client_keytab:/path/to/keytab.
+                                    </para>
+                                </listitem>
+                            </varlistentry>
+                            <varlistentry>
+                                <term>ccache</term>
+                                <listitem>
+                                    <para>Defines a credential cache the service
+                                    should use.
+                                    Example: cred_store = ccache:/path/to/ccache.
+                                    </para>
+                                </listitem>
+                            </varlistentry>
+                        </variablelist>
+
+<programlisting>
+    <userinput moreinfo="none">cred_store = keytab:/etc/krb5.keytab</userinput>
+    <userinput moreinfo="none">cred_store = ccache:FILE:/var/lib/gsstunnel/krb5cc_client</userinput>
+    <userinput moreinfo="none">cred_store = client_keytab:/var/lib/gsstunnel/client.keytab</userinput>
+</programlisting>
+
+                        <para>Default: cred_store = </para>
+
+                    </listitem>
+                </varlistentry>
+
+                <varlistentry>
+                    <term>debug (boolean)</term>
+                    <listitem>
+                        <para>Enable debugging to syslog.</para>
+                        <para>Default: debug = false</para>
+                    </listitem>
+                    </varlistentry>
+
+                <varlistentry>
+                    <term>mechs (string)</term>
+                    <listitem>
+                        <para>Restricts the allowable mechanisms</para>
+                        <para>Default: None</para>
+                    </listitem>
+                    </varlistentry>
+
+            </variablelist>
+        </para>
+    </refsect1>
+
+    <refsect1>
+        <title>SEE ALSO</title>
+        <para>
+            <citerefentry>
+                <refentrytitle>gsstunnel</refentrytitle><manvolnum>8</manvolnum>
+            </citerefentry>.
+        </para>
+    </refsect1>
+
+</refentry>
+</reference>

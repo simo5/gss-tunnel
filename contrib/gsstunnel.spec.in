@@ -1,0 +1,58 @@
+Name:		@PACKAGE_NAME@
+Version:	@PACKAGE_VERSION@
+Release:	0@PRERELEASE_VERSION@%{?dist}
+Summary:	Gsstunnel - Encrypted tunnels using GSSAPI
+
+Group:		System Environment/Libraries
+License:	GPLv3+
+URL:		https://gsstunnel
+Source0:	https://gsstunnel/%{name}-%{version}.tar.gz
+
+Requires: krb5-libs%{?_isa} >= 1.11.5
+
+BuildRequires: autoconf
+BuildRequires: automake
+BuildRequires: libtool
+BuildRequires: m4
+BuildRequires: libxslt
+BuildRequires: libxml2
+BuildRequires: docbook-style-xsl
+BuildRequires: doxygen
+BuildRequires: gettext-devel
+BuildRequires: pkgconfig
+BuildRequires: krb5-devel >= 1.11.5
+BuildRequires: pkgconfig(wbclient)
+
+%description
+A GSSAPI base tunneling service
+
+%prep
+%setup -q
+
+%build
+autoreconf -fiv
+%configure \
+    --with-wbclient \
+    --disable-static \
+    --disable-rpath
+
+make %{?_smp_mflags} all
+
+%install
+%make_install
+mkdir -p %{buildroot}%{_sysconfdir}/gsstunnel
+install -pm644 examples/gsstunnel.conf %{buildroot}%{_sysconfdir}/gsstunnel/gsstunnel.conf
+%{find_lang} %{name}
+
+%check
+
+%files -f %{name}.lang
+%config(noreplace) %{_sysconfdir}/gsstunnel/gsstunnel.conf
+%{_mandir}/man8/gsstunnel.8*
+%{_mandir}/man5/gsstunnel.conf.5*
+%doc COPYING
+
+%changelog
+* Mon Feb  9 2015 Simo Sorce <simo@redhat.com> - @PACKAGE_VERSION@-0@PRERELEASE_VERSION@
+- Start
+
