@@ -152,7 +152,7 @@ int load_config(const char *cfg_file, struct gt_config *cfg)
         free(value);
 
         ac.ret = get_string(cfg->ini_config, cfg->svcs[i].name,
-                         "spn", NULL, &cfg->svcs[i].spn);
+                         "target name", NULL, &cfg->svcs[i].target_name);
         if (ac.ret && ac.ret != ENOENT) return ac.ret;
 
         ac.ret = get_string(cfg->ini_config, cfg->svcs[i].name,

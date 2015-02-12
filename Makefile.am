@@ -76,6 +76,7 @@ POTFILES =
 
 gsstunnel_SOURCES = \
     src/gt_config.c \
+    src/gt_socket.c \
     src/gsstunnel.c
 gsstunnel_CFLAGS = \
     $(AM_CFLAGS)

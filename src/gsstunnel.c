@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -23,6 +24,7 @@
 #define N_(s) s
 
 #include "gsstunnel.h"
+#include <gssapi/gssapi.h>
 
 static const char *err_strs[] = {
                         N_("Unknown Error"),
@@ -36,6 +38,49 @@ static const char *err_string(int err)
         return strerror(err);
     }
     return err_strs[err - ERR_UNKNOWN];
+}
+
+struct gss_err {
+    gss_buffer_desc buf;
+    OM_uint32 maj;
+    OM_uint32 min;
+};
+
+static void autofreegsserr(struct gss_err *err)
+{
+    if (err->maj) {
+        fprintf(stderr, "--- {ERROR IN PROCESSING GSS ERROR}\n");
+    }
+    (void)gss_release_buffer(&err->min, &err->buf);
+}
+
+static void gt_gss_error(char *name, gss_OID mech, uint32_t maj, uint32_t min)
+{
+    AUTOCLEAN(struct gss_err err, autofreegsserr) = { {0}, 0, 0};
+    OM_uint32 msgctx;
+
+    fprintf(stderr, "[%s] Failed with:", name);
+
+    if (mech != GSS_C_NO_OID) {
+        err.maj = gss_oid_to_str(&err.min, mech, &err.buf);
+        if (err.maj != GSS_S_COMPLETE) return;
+        fprintf(stderr, " (OID: %s)", (char *)err.buf.value);
+        (void)gss_release_buffer(&err.min, &err.buf);
+    }
+
+    msgctx = 0;
+    err.maj = gss_display_status(&err.min, maj, GSS_C_GSS_CODE,
+                                 mech, &msgctx, &err.buf);
+    if (err.maj != GSS_S_COMPLETE) return;
+    fprintf(stderr, " %s,", (char *)err.buf.value);
+    (void)gss_release_buffer(&err.min, &err.buf);
+
+    msgctx = 0;
+    err.maj = gss_display_status(&err.min, min, GSS_C_MECH_CODE,
+                                 mech, &msgctx, &err.buf);
+    if (err.maj != GSS_S_COMPLETE) return;
+    fprintf(stderr, " %s\n", (char *)err.buf.value);
+    (void)gss_release_buffer(&err.min, &err.buf);
 }
 
 static void autofreestr(char **memaddr)
@@ -105,8 +150,244 @@ static void autofreesocket(int *sd)
     *sd = -1;
 }
 
-static int tunnel(struct gt_service *svc, int fd, struct sockaddr *peer)
+static void autofreegssname(gss_name_t *name)
 {
+    OM_uint32 ignore;
+    (void)gss_release_name(&ignore, name);
+}
+
+static void autofreegsscred(gss_cred_id_t *cred)
+{
+    OM_uint32 ignore;
+    (void)gss_release_cred(&ignore, cred);
+}
+
+static void autofreegssctx(gss_ctx_id_t *ctx)
+{
+    OM_uint32 ignore;
+    gss_buffer_desc out;
+    (void)gss_delete_sec_context(&ignore, ctx, &out);
+}
+
+static void autofreegssbuf(gss_buffer_t buf)
+{
+    OM_uint32 ignore;
+    (void)gss_release_buffer(&ignore, buf);
+}
+
+#define MAX_EVENTS 4
+static int tunnel(struct gt_service *svc, int fd, struct sockaddr *cliaddr)
+{
+    AUTOCLEAN(char *tmbuf, autofreestr) = NULL;
+    AUTOCLEAN(struct addrinfo *addr, autofreeaddrinfo) = NULL;
+    AUTOCLEAN(int sd, autofreesocket) = -1;
+    AUTOCLEAN(int efd, autofreesocket) = -1;
+    AUTOCLEAN(gss_name_t name, autofreegssname) = GSS_C_NO_NAME;
+    AUTOCLEAN(gss_name_t srcname, autofreegssname) = GSS_C_NO_NAME;
+    AUTOCLEAN(gss_cred_id_t cred, autofreegsscred) = GSS_C_NO_CREDENTIAL;
+    AUTOCLEAN(gss_ctx_id_t ctx, autofreegssctx) = GSS_C_NO_CONTEXT;
+    AUTOCLEAN(gss_buffer_desc output, autofreegssbuf) = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc input = GSS_C_EMPTY_BUFFER;
+    gss_buffer_desc  namebuf;
+    OM_uint32 maj, min;
+    OM_uint32 ignore;
+    struct epoll_event events[MAX_EVENTS];
+    size_t tmlen;
+    int pfd; /* plain text fd */
+    int cfd; /* cipher text fd */
+    int ret;
+
+    /* We allocate a 1 MiB buffer for messages, that's also the maximum msg
+     * size */
+    tmbuf = malloc(MAX_MSG_SIZE);
+    if (!tmbuf) return ENOMEM;
+
+    if (svc->exec) {
+        fprintf(stderr, "[%s] EXEC option not supported yet, sorry!\n",
+                        svc->name);
+        return ENOTSUP;
+    }
+
+    ret = string_to_addrinfo(svc->connect, &addr);
+    if (ret) return ret;
+
+    errno = 0;
+    sd = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);
+    if (sd == -1) return errno;
+
+    ret = connect(sd, addr->ai_addr, addr->ai_addrlen);
+    if (ret != 0) {
+        ret = errno;
+        fprintf(stderr, "[%s] Failed to connect to server '%s': %s\n",
+                        svc->name, svc->connect, strerror(ret));
+        return ret;
+    }
+
+    if (svc->target_name) {
+        namebuf.length = strlen(svc->target_name);
+        namebuf.value = svc->target_name;
+        maj = gss_import_name(&min, &namebuf,
+                              GSS_C_NT_HOSTBASED_SERVICE, &name);
+        if (maj != GSS_S_COMPLETE) {
+            fprintf(stderr, "[%s] Failed to import name: '%s' (%d/%d)\n",
+                            svc->name, svc->target_name,
+                            (int)maj, (int)min);
+            return EINVAL;
+        }
+    }
+
+    if (svc->client) {
+        pfd = fd;
+        cfd = sd;
+
+        do {
+            maj = gss_init_sec_context(&min, cred, &ctx, name, GSS_C_NO_OID,
+                                       GSS_C_MUTUAL_FLAG
+                                        | GSS_C_REPLAY_FLAG
+                                        | GSS_C_SEQUENCE_FLAG
+                                        | GSS_C_CONF_FLAG
+                                        | GSS_C_INTEG_FLAG, 0,
+                                       GSS_C_NO_CHANNEL_BINDINGS,
+                                       &input, NULL, &output, NULL, NULL);
+
+            if (maj != GSS_S_COMPLETE && maj != GSS_S_CONTINUE_NEEDED) {
+                gt_gss_error(svc->name, GSS_C_NO_OID, maj, min);
+                return EBADE;
+            }
+
+            if (output.length > MAX_MSG_SIZE) return ENOSPC;
+            if (output.length > 0) {
+                memcpy(tmbuf, output.value, output.length);
+                tmlen = output.length;
+                (void)gss_release_buffer(&ignore, &output);
+
+                ret = send_msg(cfd, tmbuf, tmlen, true);
+                if (ret) return ret;
+            }
+
+            if (maj == GSS_S_CONTINUE_NEEDED) {
+                tmlen = MAX_MSG_SIZE;
+                ret = recv_msg(cfd, tmbuf, &tmlen, true);
+                if (ret) return ret;
+
+                input.value = tmbuf;
+                input.length = tmlen;
+            }
+
+        } while (maj == GSS_S_CONTINUE_NEEDED);
+
+    } else {
+        pfd = sd;
+        cfd = fd;
+
+        if (name != GSS_C_NO_NAME) {
+            maj = gss_acquire_cred(&min, name, GSS_C_INDEFINITE,
+                                   GSS_C_NO_OID_SET, GSS_C_ACCEPT,
+                                   &cred, NULL, NULL);
+            if (maj != GSS_S_COMPLETE) {
+                fprintf(stderr,
+                        "[%s] Failed to acquire creds for '%s' (%d/%d)\n",
+                        svc->name, svc->target_name?svc->target_name:"",
+                        (int)maj, (int)min);
+                return EIO;
+            }
+        }
+
+        do {
+            tmlen = MAX_MSG_SIZE;
+            ret = recv_msg(cfd, tmbuf, &tmlen, true);
+            if (ret) return ret;
+
+            input.value = tmbuf;
+            input.length = tmlen;
+
+            maj = gss_accept_sec_context(&min, &ctx, cred, &input,
+                                         GSS_C_NO_CHANNEL_BINDINGS, &srcname,
+                                         NULL, &output, NULL, NULL, NULL);
+
+            if (maj != GSS_S_COMPLETE && maj != GSS_S_CONTINUE_NEEDED) {
+                gt_gss_error(svc->name, GSS_C_NO_OID, maj, min);
+                return EBADE;
+            }
+
+            if (output.length > MAX_MSG_SIZE) return ENOSPC;
+            if (output.length > 0) {
+                memcpy(tmbuf, output.value, output.length);
+                tmlen = output.length;
+                (void)gss_release_buffer(&ignore, &output);
+
+                ret = send_msg(cfd, tmbuf, tmlen, true);
+                if (ret) return ret;
+            }
+
+        } while (maj == GSS_S_CONTINUE_NEEDED);
+    }
+
+    /* negotiation completed, now handle traffic */
+
+    ret = init_epoll(cfd, pfd, &efd);
+    if (ret) return ret;
+
+    while (efd != -1) {
+        struct epoll_event *ev;
+        int n;
+        n = epoll_wait(efd, events, MAX_EVENTS, -1);
+        if (n == -1) {
+            ret = errno;
+            if (ret == EINTR) continue;
+            return ret;
+        }
+        for (int i = 0; i < n; i++) {
+            ev = &events[i];
+            if (ev->events & (EPOLLERR|EPOLLHUP)) {
+                /* one of the peers gave up */
+                return ENOLINK;
+            }
+
+            /* RECEIVE */
+
+            tmlen = MAX_MSG_SIZE;
+            ret = recv_msg(ev->data.fd, tmbuf, &tmlen, (ev->data.fd == cfd));
+            if (ret) return ret;
+
+            if (ev->data.fd == cfd) {
+                /* sender encrypts */
+                input.value = tmbuf;
+                input.length = tmlen;
+                maj = gss_unwrap(&min, ctx, &input, &output, NULL, NULL);
+                if (maj != GSS_S_COMPLETE) {
+                    gt_gss_error(svc->name, GSS_C_NO_OID, maj, min);
+                    return EIO;
+                }
+                if (output.length > MAX_MSG_SIZE) return ENOSPC;
+                memcpy(tmbuf, output.value, output.length);
+                tmlen = output.length;
+                (void)gss_release_buffer(&ignore, &output);
+            }
+
+            /* RESEND */
+            if (ev->data.fd == pfd) {
+                /* receiver encrypts */
+                input.value = tmbuf;
+                input.length = tmlen;
+                maj = gss_wrap(&min, ctx, 1, 0, &input, NULL, &output);
+                if (maj != GSS_S_COMPLETE) {
+                    gt_gss_error(svc->name, GSS_C_NO_OID, maj, min);
+                    return EIO;
+                }
+                if (output.length > MAX_MSG_SIZE) return ENOSPC;
+                memcpy(tmbuf, output.value, output.length);
+                tmlen = output.length;
+                (void)gss_release_buffer(&ignore, &output);
+            }
+
+            /* send to the other fd, add header only if we encrypted */
+            ret = send_msg((ev->data.fd == pfd)?cfd:pfd,
+                           tmbuf, tmlen, (ev->data.fd == pfd));
+            if (ret) return ret;
+        }
+    }
+
     return 0;
 }
 
@@ -251,7 +532,7 @@ int main(int argc, const char *argv[])
     for (int i = 0; i < cfg.num_svcs; i++) {
         ret = runsvc(&cfg.svcs[i]);
         if (ret) {
-            fprintf(stderr, "Failed to start service: %s\n", err_string(ret));
+            fprintf(stderr, "Service terminated: %s\n", err_string(ret));
             return 3;
         }
     }

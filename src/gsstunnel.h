@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <ini_configobj.h>
 
+#define MAX_MSG_SIZE 1024*1024 /* 1 Mib */
 #define AUTOCLEAN(def, fn) def __attribute__ ((__cleanup__(fn)))
 
 enum gterr {
@@ -15,7 +16,7 @@ enum gterr {
 struct gt_service {
     char *name;
     bool client;
-    char *spn;
+    char *target_name;
     char *accept;
     char *connect;
     char *exec;
@@ -34,3 +35,6 @@ struct gt_config {
 };
 
 int load_config(const char *cfg_file, struct gt_config *cfg);
+int recv_msg(int sd, char *buf, size_t *buflen, bool header);
+int send_msg(int sd, char *buf, size_t buflen, bool header);
+int init_epoll(int fd1, int fd2, int *efd);
