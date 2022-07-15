@@ -3,8 +3,9 @@
 #include <stdbool.h>
 #include <ini_configobj.h>
 
-#define MAX_MSG_SIZE 1024*1024 /* 1 Mib */
+#define MAX_MSG_SIZE 16*1024 /* 16 Kib */
 #define AUTOCLEAN(def, fn) def __attribute__ ((__cleanup__(fn)))
+#define PKT_GSSENCREQ   80877104
 
 enum gterr {
     ERR_UNKNOWN = 0x97110000,

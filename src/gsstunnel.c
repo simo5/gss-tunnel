@@ -196,8 +196,10 @@ static int tunnel(struct gt_service *svc, int fd, struct sockaddr *cliaddr)
     int pfd; /* plain text fd */
     int cfd; /* cipher text fd */
     int ret;
+    int do_once = 0;
+    char answer[1];
 
-    /* We allocate a 1 MiB buffer for messages, that's also the maximum msg
+    /* We allocate a 16 KiB buffer for messages, that's also the maximum msg
      * size */
     tmbuf = malloc(MAX_MSG_SIZE);
     if (!tmbuf) return ENOMEM;
@@ -241,6 +243,20 @@ static int tunnel(struct gt_service *svc, int fd, struct sockaddr *cliaddr)
         cfd = sd;
 
         do {
+            if (do_once == 0) {
+                char gssencrequest[] = { 0x00, 0x00, 0x00, 0x08, 0x04, 0xD2, 0x16, 0x30 };
+                ret = send(cfd, gssencrequest, 8, 0);
+                fprintf(stderr, "postgres send gssencrequest return: %d\n", ret);
+                ret = recv(cfd, answer, 1, 0);
+                fprintf(stderr, "postgres recv gssencrequest answer: %s\n", answer);
+                fprintf(stderr, "postgres recv gssencrequest return: %d\n", ret);
+                if (answer[0] != 'G') {
+                    fprintf(stderr, "did not get a GSS 'G' response");
+                    return 1;
+                }
+                do_once = 1;
+            }
+
             maj = gss_init_sec_context(&min, cred, &ctx, name, GSS_C_NO_OID,
                                        GSS_C_MUTUAL_FLAG
                                         | GSS_C_REPLAY_FLAG
