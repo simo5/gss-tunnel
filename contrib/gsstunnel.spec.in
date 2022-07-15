@@ -4,7 +4,7 @@ Release:	0@PRERELEASE_VERSION@%{?dist}
 Summary:	Gsstunnel - Encrypted tunnels using GSSAPI
 
 Group:		System Environment/Libraries
-License:	GPLv3+
+License:	ISC
 URL:		https://gsstunnel
 Source0:	https://gsstunnel/%{name}-%{version}.tar.gz
 
